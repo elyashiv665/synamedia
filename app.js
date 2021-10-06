@@ -1,9 +1,8 @@
 const express = require('express');
 const app = express();
-const bodyParser=require('body-parser');
+const axios = require('axios');
 
 let db = require("./db");
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -24,8 +23,6 @@ async function post2dataBase(source, dest, hits, dist){
 
 async function googleDistance(source, destination){
   const apikey = 'AIzaSyDJt5ai8Ui06dCItSuChs30bJB--n_78mA';
-  const axios = require('axios');
-
   const config = {
   method: 'get',
   url: 'https://maps.googleapis.com/maps/api/distancematrix/json?origins='+ source +
