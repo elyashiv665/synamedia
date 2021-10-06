@@ -2,16 +2,24 @@ const express = require('express');
 const app = express();
 const bodyParser=require('body-parser');
 
-var mongooseTools = require("./mongooseTools");
+let db = require("./db");
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 
-var Distances = mongooseTools.Distances;
+let Distances = db.Distances;
 
 async function get_hello(req, res){
   res.status(200).send('hello');
+}
+
+async function post2dataBase(source, dest, hits, dist){
+    const newObj = new Distances({'source':source, 'destination':dest, 'hits':hits,'distance':dist});
+    const result = await newObj.save();
+    if (result !== newObj) {
+      throw new Error('failed to save');
+    }
 }
 
 async function googleDistance(source, destination){
@@ -24,13 +32,13 @@ async function googleDistance(source, destination){
         '&destinations='+ destination+'&key='+apikey,
   headers: { }
   };
-  var dist;
+  let dist;
   await axios(config).then(function (response) {
     dist = parseInt((response.data.rows[0].elements[0].distance.text).split(' ')[0]);
   })
   .catch(function (error) {
-    //in the parent function(get_distance) getting false means error
-    return false;
+    //in the parent function(get_distance) getting -1 means error
+    return -1;
   })
   return dist;
 }
@@ -46,45 +54,53 @@ async function get_distance(req, res){
       return;
     }
 
-    // if no connection
-    if(!mongooseTools.checkConnection()){
-      const distance = await googleDistance(source, dest);
-      if(distance){ res.status(200).send({"distance":distance});return;}
-      else{res.status(500).send("fail to find distance with google api");return;}
+    const connection = db.checkConnection();
+    // if no connection get google distance and return
+    if(!connection){
+      dist = await googleDistance(source, dest);
+      if(dist === -1){
+        res.status(500).send("fail to find distance with google api"); 
+      }
+      if(!connection){
+        res.status(200).send({"distance":dist});
+      }
+      return;
     }
 
-    // get previous distance or calculate new one
-    var target;
-    if(await Distances.findOne({'source':source, 'destination':dest})){
+    let findRes;
+    let target;
+    // check if distance is already in the database
+    findRes = await Distances.findOne({'source':source, 'destination':dest});
+    if(findRes){
       target = {'source':source, 'destination':dest};
-    }else if(await Distances.findOne({'source':dest, 'destination':source})){
-      target = {'source':dest, 'destination':source};
-    }
-    else{// else Distance is not in the database
-      target = {'source':source, 'destination':dest}; 
-      //save new element in the database
-      const dist = await googleDistance(source, dest);
-      if(!dist){
-        res.status(500).send("fail to find distance with google api");
+    }else{
+      findRes = await Distances.findOne({'source':dest, 'destination':source});
+      if(findRes){
+        target = {'source':dest, 'destination':source};
+      }else{ // obj is not in database 
+        //save new element in the database and return
+        try{
+          const dist = await googleDistance(source, dest);
+          if(dist === -1){
+            res.status(500).send("fail to find distance with google api"); 
+            console.log("500");
+            return;
+          }
+          await post2dataBase(source, dest, 1, dist);
+          res.status(200).send({'distance':dist});
+        }catch(err){
+          res.status(500).send("database connection error");
+        }
         return;
       }
-      try{
-        const newObj = new Distances({'source':source, 'destination':dest, 'hits':0,'distance':dist});
-        await newObj.save();
-      }catch(err){
-        res.status(500).send("database connection error");
-        return;
-      }
     }
-
-    // target is in the database, update hits and get distance:
-    const obj = await Distances.findOne(target);
-    const distance = obj.distance;
-    const hits = obj.hits;
+    // distance in the database
+    const dist = findRes.distance;
+    const hits = findRes.hits;
 
     //update hits
     await Distances.findOneAndUpdate(target, {'hits':(hits+1)});
-    res.status(200).send(JSON.stringify({"distance":distance}));
+    res.status(200).send(JSON.stringify({"distance":dist}));
   }catch(err){
     res.status(500).send(err.message);
   }
@@ -92,7 +108,7 @@ async function get_distance(req, res){
   
 async function get_popular_search(req, res){
   try{
-    var mostPopular = await Distances.find({}).sort({'hits' : -1}).limit(1);
+    let mostPopular = await Distances.find({}).sort({'hits' : -1}).limit(1);
     if(mostPopular ===[]){
       res.status(400).send("database is empty");
       return;
@@ -118,18 +134,17 @@ async function post_distance(req, res){
       return;
     }
     //check if allready exist in database
-    var hits;
+    let hits;
     if( await Distances.findOne({'source':source, 'destination':dest})){
       const Obj = await Distances.findOneAndUpdate({'source':source, 'destination':dest}, {'distance': dist});
       hits = Obj.hits;
     }else if(await Distances.findOne({'source':dest, 'destination':source})){
       const Obj = await Distances.findOneAndUpdate({'source':dest, 'destination':source}, {'distance': dist});
       hits = Obj.hits;
-    }else{
-      const newObj = new Distances({'source':source, 'destination':dest, 'distance': dist});
-      await newObj.save();
-      hits = 0;
-    }
+    }else{ //new Distance obj
+        hits = 0
+        await post2dataBase(source, dest, hits, dist);
+      }
     res.status(201).send({source:source, destination:dest, hits:hits});
   }catch(err){
     res.status(500).send(err.message);
@@ -141,7 +156,7 @@ async function post_distance(req, res){
 
 app.get('/hello', get_hello);
 app.get('/distance', get_distance);
-app.get('/health', mongooseTools.get_health);
+app.get('/health', db.get_health);
 app.get('/popularsearch', get_popular_search);
 
 app.post('/distance', post_distance);
