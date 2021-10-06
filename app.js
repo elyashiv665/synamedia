@@ -35,7 +35,7 @@ async function googleDistance(source, destination){
   })
   .catch(function (error) {
     //in the parent function(get_distance) getting -1 means error
-    return -1;
+    dist = -1;
   })
   return dist;
 }
@@ -80,7 +80,6 @@ async function get_distance(req, res){
           const dist = await googleDistance(source, dest);
           if(dist === -1){
             res.status(500).send("fail to find distance with google api"); 
-            console.log("500");
             return;
           }
           await post2dataBase(source, dest, 1, dist);
